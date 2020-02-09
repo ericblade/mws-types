@@ -6,7 +6,7 @@ const parser = require('xml2json');
 const httpserver = require('http-server');
 const exec = require('node-exec-promise').exec;
 
-const BASE_URL = 'https://images-na.ssl-images-amazon.com/images/G/01/rainier/help/xsd/release_1_9';
+const BASE_URL = 'https://images-na.ssl-images-amazon.com/images/G/01/rainier/help/xsd/release_4_1';
 const ENVELOPE_TEMP = 'amzn-envelope.original.xsd';
 const ENVELOPE = 'amzn-envelope.xsd';
 const DEST = './xsd'; // TODO: make sure dest exists
