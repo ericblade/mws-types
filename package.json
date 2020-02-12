@@ -4,6 +4,7 @@
   "description": "Amazon MWS XSD files converted to TypeScript using the cxsd tool",
   "main": "index.js",
   "scripts": {
+    "build:win": "del /s /q xsd & rmdir /s /q cache & rmdir /s /q xmlns & node .",
     "test": "echo \"Error: no test specified\" && exit 1",
     "cxsd": "cxsd"
   },

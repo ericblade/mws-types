@@ -6,8 +6,8 @@ const parser = require('xml2json');
 const httpserver = require('http-server');
 const exec = require('node-exec-promise').exec;
 
-// const BASE_URL = 'https://images-na.ssl-images-amazon.com/images/G/01/rainier/help/xsd/release_1_9';
-const BASE_URL = 'https://images-na.ssl-images-amazon.com/images/G/01/rainier/help/xsd/release_4_1';
+const BASE_URL = 'https://images-na.ssl-images-amazon.com/images/G/01/rainier/help/xsd/release_1_9';
+// const BASE_URL = 'https://images-na.ssl-images-amazon.com/images/G/01/rainier/help/xsd/release_4_1';
 // TODO: Anyone know where to find any XSD for the APIs other than Products?
 const PRODUCT_API_BASE = 'http://g-ecx.images-amazon.com/images/G/01/mwsportal/doc/en_US/products';
 const PRODUCT_API_FILE = 'default.xsd';
@@ -34,15 +34,15 @@ async function getXsdIncludes(file) {
     const schemaKey = json['xsd:schema'] ? 'xsd:schema'
         : json['schema'] ? 'schema'
         : null;
+    // console.warn('* json = ', json);
     if (!schemaKey) return null;
-    console.warn('* json = ', json);
     if (!json[schemaKey]) return null;
     const key = json[schemaKey]['xsd:include'] !== undefined ? 'xsd:include'
         : json[schemaKey]['xs:include'] !== undefined ? 'xs:include'
         : json[schemaKey]['import'] !== undefined ? 'import'
         : null;
     if (!key) return null;
-    console.warn('* includes=', json[schemaKey][key]);
+    // console.warn('* includes=', json[schemaKey][key]);
     if (json[schemaKey][key].length) {
         return json[schemaKey][key].map((inc) => {
             if (inc.schemaLocation !== 'xml.xsd') return inc.schemaLocation;
@@ -52,18 +52,29 @@ async function getXsdIncludes(file) {
     return json[schemaKey][key].schemaLocation !== 'xml.xsd' ? [json[schemaKey][key].schemaLocation] : null;
 }
 
+async function getJsonFromXml(file) {
+    const xml = await fs.readFile(`${DEST}/${file}`);
+    const json = JSON.parse(parser.toJson(xml, { reversible: true }));
+    return json;
+}
+
+async function putJsonToXml(json, file) {
+    // console.warn('* putJsonToXml', json, file);
+    const str = JSON.stringify(json);
+    const xml = parser.toXml(str);
+    await fs.writeFile(`${DEST}/${file}`, xml);
+    // console.warn('* put complete');
+    return;
+}
+
 (async () => {
     console.log('* Getting envelope');
     await getFile(ENVELOPE, ENVELOPE_TEMP);
 
-    const env = await fs.readFile(`${DEST}/${ENVELOPE_TEMP}`);
-
     console.log('* Adding targetNamespace to envelope');
-    const json = JSON.parse(parser.toJson(env, { reversible: true }));
-    json['xsd:schema'].targetNamespace = 'urn:amazon-mws';
-    const str = JSON.stringify(json);
-    const xml = parser.toXml(str);
-    await fs.writeFile(`${DEST}/${ENVELOPE}`);
+    const envelopeJson = await getJsonFromXml(ENVELOPE_TEMP);
+    envelopeJson['xsd:schema'].targetNamespace = 'urn:amazon-mws';
+    await putJsonToXml(envelopeJson, ENVELOPE);
 
     console.log('* Getting dependencies of envelope');
     const deps = await getXsdIncludes(ENVELOPE_TEMP);
@@ -74,6 +85,7 @@ async function getXsdIncludes(file) {
             let checked = 0;
             deps.forEach(async (file) => {
                 const inc = await getXsdIncludes(file);
+                // console.warn(`* file ${file} includes ${inc}`);
                 if (inc) {
                     furtherDownloads.push(...inc);
                 }
@@ -84,7 +96,7 @@ async function getXsdIncludes(file) {
             });
         });
         if (furtherDownloads.length > 0) {
-            console.log('* Getting next level of dependencies');
+            console.log('* Getting next level of dependencies', furtherDownloads);
             // TODO: ideally, getFiles would handle recursively getting all deps, but I don't want
             // risk running into infinte loops, and I think depth of 1 recursion should be ok for
             // existing schema
@@ -92,15 +104,31 @@ async function getXsdIncludes(file) {
         }
     }
 
+    console.log('* Getting xml.xsd');
+    await wget('http://www.w3.org/XML/1998/namespace/xml.xsd', { output: `${DEST}/xml.xsd`});
     console.log('* Getting API XSDs');
     await wget(`${PRODUCT_API_BASE}/${PRODUCT_API_FILE}`, { output: `${DEST}/${PRODUCT_API_FILE}` });
-    const apiDeps = await getXsdIncludes(PRODUCT_API_FILE);
-    console.warn('* apiDeps=', apiDeps);
+    const depsJson = await getJsonFromXml(PRODUCT_API_FILE);
+    // ItemAttributesType provides a "xml:lang" thing, which blows up cxsd .. so delete it here.
+    const indexToDeleteFrom = depsJson.schema.complexType.findIndex(x => x.name === 'ItemAttributesType');
+    if (indexToDeleteFrom > -1) {
+        delete depsJson.schema.complexType[indexToDeleteFrom].complexContent.extension.attribute;
+        putJsonToXml(depsJson, PRODUCT_API_FILE);
+    }
+    // debugger;
+    // if (depsJson.schema && depsJson.schema.import) {
+    //     console.warn('* import before=', depsJson.schema.import);
+    //     depsJson.schema.import = depsJson.schema.import.filter((imp) => imp.schemaLocation !== 'xml.xsd');
+    //     console.warn('* import after=', depsJson.schema.import);
+    //     putJsonToXml(depsJson, PRODUCT_API_FILE);
+    // }
+    // const apiDeps = await getXsdIncludes(PRODUCT_API_FILE);
+    const apiDeps = depsJson.schema.import && depsJson.schema.import.map((imp) => imp.schemaLocation);
+    // console.warn('* apiDeps=', apiDeps);
     if (apiDeps) {
         await getFiles(apiDeps.filter((x => !!x && x !== 'xml.xsd')), PRODUCT_API_BASE);
         // TODO: i don't believe there's a second level possible here, but maybe?
     }
-    // TODO: Need to re-write the default.xsd to remove <import namespace="http://www.w3.org/XML/1998/namespace" schemaLocation="xml.xsd" />
 
     console.log('* Starting http server');
     const server = httpserver.createServer({ root: DEST });
@@ -125,5 +153,8 @@ async function getXsdIncludes(file) {
         console.error('* cxsd error', err);
         //
     }
+
+    server.close();
+    console.log('* Completed. If there are no errors, output is in xmlns directory.');
     // TODO: we might want to go through the output files from cxsd and automatically s/localhost:8080/${BASE_URL}/
 })();
